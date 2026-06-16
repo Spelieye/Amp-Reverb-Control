@@ -16,6 +16,7 @@
 // so the output driver on PA3 is not disabled.
 #define PORT_LED     PORTA
 #define DDR_LED      DDRA
+#define PIN_LED      PINA
 #define PIN_LED_RED  PA2  // D4 Red LED (On/Off)
 #define PIN_LED_RG_G PA3  // D3 RG LED Green (Pot 2 active)
 #define PIN_LED_RG_R PA4  // D3 RG LED RED (Pot 1 active)

@@ -150,8 +150,8 @@ int main(void) {
     
     while (1) {
         // Continuously read both potentiometers
-        pot1_val = adc_read(0); // PA0
-        pot2_val = adc_read(1); // PA1
+        pot1_val = adc_read(0); // ADC0
+        pot2_val = adc_read(1); // ADC1
 
           // Handle Switch 1 Debounce
         if (sw1_flag) {
@@ -177,20 +177,24 @@ int main(void) {
         
         // Update Red LED based on On/Off status
         if (on_off_status) {
-            PORT_LED |= (1 << PIN_LED_RED);
+            if (!(PIN_LED & (1 << PIN_LED_RED))) PORT_LED |= (1 << PIN_LED_RED);
         } else {
-            PORT_LED &= ~(1 << PIN_LED_RED);
+            if (PIN_LED & (1 << PIN_LED_RED)) PORT_LED &= ~(1 << PIN_LED_RED);
         }
         
         // Alternate RG LED based on Pot Selection
         if (pot_selection == 0) {
             // Pot 1 selected: Turn Red ON, Green OFF
-            PORT_LED |= (1 << PIN_LED_RG_R);
-            PORT_LED &= ~(1 << PIN_LED_RG_G);
+            if (PIN_LED & (1 << PIN_LED_RG_G)) {
+                PORT_LED |= (1 << PIN_LED_RG_R);
+                PORT_LED &= ~(1 << PIN_LED_RG_G);
+            }
         } else {
             // Pot 2 selected: Turn Red OFF, Green ON
-            PORT_LED &= ~(1 << PIN_LED_RG_R);
-            PORT_LED |= (1 << PIN_LED_RG_G);
+            if (PIN_LED & (1 << PIN_LED_RG_R)) {
+                PORT_LED &= ~(1 << PIN_LED_RG_R);
+                PORT_LED |= (1 << PIN_LED_RG_G);
+           }
         } 
         
         // Small delay to regulate the main loop speed

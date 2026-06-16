@@ -154,9 +154,9 @@ int main(void) {
           
             // Activate or deactivate TLP3555 based on the on/off bit. If ON=1, set PIN_TLP LOW. 
             if (!(payload[0] & SWITCH_ON_MASK)) {
-                PORT_SPI |= (1 << PIN_TLP); // Mute the effect by pullng pin HIGH
+                if (!(PINB & (1 << PIN_TLP))) PORT_SPI |= (1 << PIN_TLP); // Mute the effect by pullng pin HIGH
             } else {
-                PORT_SPI &= ~(1 << PIN_TLP); // Pull pin LOW
+                if (PINB & (1 << PIN_TLP)) PORT_SPI &= ~(1 << PIN_TLP); // Pull pin LOW
             }
             
             // Decode which pot is currently selected (pot1=0, pot2=1)
