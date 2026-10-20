@@ -45,6 +45,6 @@ void io_init(void);
 void adc_init(void);
 uint8_t adc_read(uint8_t channel);
 void usi_init(void);
-uint8_t calculate_crc8(uint8_t *data, uint8_t len);
+uint8_t calculate_checksum(uint8_t *data, uint8_t len);
 
 #endif // SLAVE_PEDAL_H

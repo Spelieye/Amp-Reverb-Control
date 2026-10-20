@@ -19,8 +19,8 @@
 #define PIN_TLP     PB5  // TLP3555 Optorelay Control (AN pin)
 
 // Protocol Definitions
-#define PACKET_HEADER       0xAA
-#define SWITCH_ON_MASK      0x01
+#define PACKET_HEADER    0xAA
+#define PAYLOAD_MASK     0x01
 
 // Function Prototypes
 void io_init(void);
@@ -29,6 +29,23 @@ uint8_t spi_transfer(uint8_t data);
 void adc_init(void);
 uint8_t adc_read_8bit(void);
 void mcp41100_set(uint8_t value);
-uint8_t calculate_crc8(uint8_t *data, uint8_t len);
+uint8_t calculate_checksum(uint8_t *data, uint8_t len);
+
+// Define the single-bit transfer sequence as a macro
+#define SPI_TRANSFER_BIT \
+    if (data & 0x80) { \
+        PORT_SPI |= (1 << PIN_DO); \
+    } else { \
+        PORT_SPI &= ~(1 << PIN_DO); \
+    } \
+    _delay_us(2); \
+    PORT_SPI |= (1 << PIN_SCK); \
+    _delay_us(2); \
+    received_data <<= 1; \
+    if (PINB & (1 << PIN_DI)) { \
+        received_data |= 0x01; \
+    } \
+    data <<= 1; \
+    PORT_SPI &= ~(1 << PIN_SCK);
 
 #endif // AMP_MASTER_H

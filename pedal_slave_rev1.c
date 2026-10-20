@@ -24,11 +24,14 @@ volatile uint8_t on_off_status = 1; // 0 = OFF, 1 = ON; Default is to be ON
 volatile uint8_t pot_selection = 0; // 0 = Pot1, 1 = Pot2
 volatile uint8_t sw1_flag = 0;
 volatile uint8_t sw2_flag = 0;
+volatile uint8_t last_sw1_state = 1;
+volatile uint8_t last_sw2_state = 1;
 
 // Transmission state machine variables
 volatile uint8_t transmission_step = 0;
-uint8_t pot1_val = 0;
-uint8_t pot2_val = 0;
+volatile uint8_t tx_buffer[5];
+volatile uint8_t tx_payload[3]; // Combine payload and CRC into one array during your atomic copy
+volatile uint8_t tx_crc;
 
 void io_init(void) {
     // 1. Configure LEDs as outputs
@@ -36,7 +39,7 @@ void io_init(void) {
     
     // 2. Configure USI SPI Pins
     DDR_SPI |= (1 << PIN_DO); // DO is output
-    DDR_SPI &= ~((1 << PIN_DI) | (1 << PIN_USCK) | (1 << PIN_CS)); // DI, USCK, CS are inputs
+    DDR_SPI &= ~((1 << PIN_DI) | (1 << PIN_USCK) | (1 << PIN_CS)); // DI, SCK, CS are inputs
     PORT_SPI |= (1 << PIN_CS); // Enable pull-up on CS to detect disconnects
     
     // 3. Configure Switches as inputs with internal pull-ups 
@@ -75,19 +78,27 @@ void usi_init(void) {
     USICR = (1 << USIOIE) | (1 << USIWM0) | (1 << USICS1);
 }
 
-uint8_t calculate_crc8(uint8_t *data, uint8_t len) {
-    uint8_t crc = 0x00;
+// uint8_t calculate_crc8(uint8_t *data, uint8_t len) {
+//     uint8_t crc = 0x00;
+//     for (uint8_t i = 0; i < len; i++) {
+//         crc ^= data[i];
+//         for (uint8_t j = 0; j < 8; j++) {
+//             if (crc & 0x80) {
+//                 crc = (crc << 1) ^ 0x07;
+//             } else {
+//                 crc <<= 1;
+//             }
+//         }
+//     }
+//     return crc;
+// }
+
+uint8_t calculate_checksum(uint8_t *data, uint8_t len) {
+    uint8_t checksum = 0x00; // Alternatively, start with a seed like 0xAA
     for (uint8_t i = 0; i < len; i++) {
-        crc ^= data[i];
-        for (uint8_t j = 0; j < 8; j++) {
-            if (crc & 0x80) {
-                crc = (crc << 1) ^ 0x07;
-            } else {
-                crc <<= 1;
-            }
-        }
+        checksum ^= data[i];
     }
-    return crc;
+    return checksum;
 }
 
 // ---------------------------------------------------------
@@ -103,11 +114,21 @@ ISR(IO_PINS_vect) {
         USISR = (1 << USIOIF);          // Clear overflow flag to start counting
     }
 
-    // 2. Check if SW1 went LOW (Pressed)
-    if (!(PIN_SW & (1 << PIN_SW1))) sw1_flag =1; // Mark sw1 as pressed
+    // Read the current logical states of the two switches (1 = HIGH/Unpressed, 0 = LOW/Pressed)
+    uint8_t current_sw1 = (PIN_SW & (1 << PIN_SW1)) ? 1 : 0;
+    uint8_t current_sw2 = (PIN_SW & (1 << PIN_SW2)) ? 1 : 0;
+
+    // 2. SW1: Only set the flag if it was HIGH last time, and is LOW now
+    if (last_sw1_state == 1 && current_sw1 == 0) {
+        sw1_flag = 3;
+    }
+    last_sw1_state = current_sw1; // Save state for the next interrupt
     
-    // 3. Check if SW2 went LOW (Pressed)
-    if (!(PIN_SW & (1 << PIN_SW2))) sw2_flag = 1; // Mark sw2 as pressed
+    // 3. SW2: Only set the flag if it was HIGH last time, and is LOW now
+    if (last_sw2_state == 1 && current_sw2 == 0) {
+        sw2_flag = 3;
+    }
+    last_sw2_state = current_sw2; // Save state for the next interrupt
 }
 
 // Triggered every 8 clock cycles from the Master
@@ -116,25 +137,30 @@ ISR(USI_OVF_vect) {
     
     if (transmission_step == 1) {
         // Load Payload 1: Status Byte
-        USIDR = (pot_selection << 1) | on_off_status;
+        USIDR = tx_payload[0];
     } 
     else if (transmission_step == 2) {
         // Load Payload 2: Pot 1 Value
-        USIDR = pot1_val;
-    } 
+        USIDR = tx_payload[1];
+    }
     else if (transmission_step == 3) {
         // Load Payload 3: Pot 2 Value
-        USIDR = pot2_val;
+        USIDR = tx_payload[2];
     } 
     else if (transmission_step == 4) {
-        // Calculate and load CRC over the 3 payload bytes
-        uint8_t payload[3] = {(pot_selection << 1) | on_off_status, pot1_val, pot2_val};
-        USIDR = calculate_crc8(payload, 3);
+        // send CRC
+        USIDR = tx_crc;
     }
     
     // Clear USI overflow flag to prepare for the next byte 
     USISR = (1 << USIOIF); 
 }
+
+// ISR(USI_OVF_vect) {
+//     USIDR = tx_payload[transmission_step];
+//     transmission_step++;
+//     USISR = (1 << USIOIF); 
+// }
 
 // ---------------------------------------------------------
 // Main Execution Loop
@@ -149,53 +175,68 @@ int main(void) {
     sei(); 
     
     while (1) {
-        // Continuously read both potentiometers
-        pot1_val = adc_read(0); // ADC0
-        pot2_val = adc_read(1); // ADC1
+        // Continuously read both pots and status
+        // Pots --> CCW is highest resistance value, CW is lowest
+        // Gather all live data into a temporary, unprotected array
+        uint8_t temp_payload[3];
+        temp_payload[0] = (pot_selection << 1) | on_off_status;
+        temp_payload[1] = adc_read(0); // ADC0 --> pot1
+        temp_payload[2] = adc_read(1); // ADC1 --> pot2
+
+        // Calculate the CRC on this temporary data
+        uint8_t temp_crc = calculate_checksum(temp_payload, 3);
+
+        // ATOMIC COPY: Briefly disable interrupts to update the transmission snapshot
+        cli(); // Disable global interrupts so Master cannot interrupt this copy
+        tx_payload[0] = temp_payload[0];
+        tx_payload[1] = temp_payload[1];
+        tx_payload[2] = temp_payload[2];
+        tx_crc = temp_crc;
+        sei(); // Immediately re-enable global interrupts
 
           // Handle Switch 1 Debounce
-        if (sw1_flag) {
-            _delay_ms(20); // Safe to delay here!
-            
-            // Verify it is still LOW after the delay (valid press)
-            if (!(PIN_SW & (1 << PIN_SW1))) {
-                on_off_status ^= 1; // Toggle the status
+        if (sw1_flag > 0) {
+            sw1_flag--; // Decrement the counter every ~10ms loop
+
+            // When the counter hits exactly 0, the delay has passed
+            if (sw1_flag == 0) {
+                // Verify it is still LOW after the delay (valid press)
+                if (!(PIN_SW & (1 << PIN_SW1))) {
+                    on_off_status ^= 1; // Toggle the status
+                }
             }
-            sw1_flag = 0; // Clear the flag so it waits for the next press
         }
         
         // Handle Switch 2 Debounce
-        if (sw2_flag) {
-            _delay_ms(20); // Safe to delay here!
-            
-            // Verify it is still LOW after the delay (valid press)
-            if (!(PIN_SW & (1 << PIN_SW2))) {
-                pot_selection ^= 1; // Toggle the pot selection
-            }
-            sw2_flag = 0; // Clear the flag so it waits for the next press
+        if (sw2_flag > 0) {
+            sw2_flag--; 
+
+            if (sw2_flag == 0) {   
+                // Verify it is still LOW after the delay (valid press)
+                if (!(PIN_SW & (1 << PIN_SW2))) {
+                    pot_selection ^= 1; // Toggle the pot selection
+                }
+            }   
         }
         
         // Update Red LED based on On/Off status
         if (on_off_status) {
-            if (!(PIN_LED & (1 << PIN_LED_RED))) PORT_LED |= (1 << PIN_LED_RED);
+          PORT_LED |= (1 << PIN_LED_RED);
         } else {
-            if (PIN_LED & (1 << PIN_LED_RED)) PORT_LED &= ~(1 << PIN_LED_RED);
+            PORT_LED &= ~(1 << PIN_LED_RED);
         }
         
         // Alternate RG LED based on Pot Selection
-        if (pot_selection == 0) {
-            // Pot 1 selected: Turn Red ON, Green OFF
-            if (PIN_LED & (1 << PIN_LED_RG_G)) {
-                PORT_LED |= (1 << PIN_LED_RG_R);
-                PORT_LED &= ~(1 << PIN_LED_RG_G);
-            }
-        } else {
+        if (pot_selection) {
             // Pot 2 selected: Turn Red OFF, Green ON
-            if (PIN_LED & (1 << PIN_LED_RG_R)) {
-                PORT_LED &= ~(1 << PIN_LED_RG_R);
-                PORT_LED |= (1 << PIN_LED_RG_G);
-           }
-        } 
+            PORT_LED &= ~(1 << PIN_LED_RG_R);
+            PORT_LED |= (1 << PIN_LED_RG_G);
+
+        } else {
+            // Pot 1 selected: Turn Red ON, Green OFF
+            PORT_LED |= (1 << PIN_LED_RG_R);
+            PORT_LED &= ~(1 << PIN_LED_RG_G);
+        }
         
         // Small delay to regulate the main loop speed
         _delay_ms(10);
