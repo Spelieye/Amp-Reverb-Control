@@ -40,6 +40,8 @@ The mcu on both boards is an Atmel ATtiny26L. The PCB boards were designed to be
 ### Power Connection
 <img width="1240" height="288" alt="Screenshot 2026-10-20 at 3 49 44 PM" src="https://github.com/user-attachments/assets/cb4eb627-167b-4534-a12d-c457b293b2ed" />
 
+The 6 pin comms header connects to "Slave_MCU" header on both boards. 
+
 ## Flashing 
 
 To flash the mcus be sure to use the correct `.hex` file for the associated board. Connect your flasher to the ISP header. 
